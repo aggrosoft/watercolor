@@ -1,105 +1,184 @@
-package watercolor.factories.svg
+package watercolor.utils
 {
-	import flash.display.Bitmap;
-	import flash.display.BitmapData;
-	import flash.display.Loader;
-	import flash.events.Event;
-	import flash.utils.ByteArray;
 	
-	import mx.utils.Base64Decoder;
+	import flash.geom.Matrix;
+	import flash.utils.Dictionary;
 	
-	import spark.primitives.BitmapImage;
-	import spark.primitives.Rect;
+	import mx.geom.Transform;
 	
-	import watercolor.factories.svg.namespaces.ns_xlink;
+	import watercolor.elements.Element;
 	import watercolor.factories.svg.util.SVGAttributes;
-	import watercolor.factories.svg.util.URIManager;
 
-	/**
-	 * Spark BitmapImage Factory
-	 * 
-	 * SVG Documentation: http://www.w3.org/TR/SVG/struct.html#ImageElement
-	 * Spark Documentation: http://help.adobe.com/en_US/FlashPlatform/reference/actionscript/3/spark/primitives/BitmapImage.html
-	 */ 
-	public class BitmapImageFactory
+	public class SVGUtil
 	{
-		public function BitmapImageFactory()
+
+		public var SVGtoWCmap:Dictionary = new Dictionary();
+
+		public function SVGUtil()
 		{
+			SVGtoWCmap['rect'] = rectFactory;
 		}
 		
-		/**
-		 * Create Spark BitmapImage from SVG Image
-		 */ 
-		public static function createSparkFromSVG(node:XML, uriManager:URIManager, element:BitmapImage = null):BitmapImage
-		{
-			if (!element)
-			{
-				element = new BitmapImage();
-			}
-			
-			// Decorate through parents
-			GraphicElementFactory.createSparkFromSVG(node, uriManager, element);
-			
-			// fillmode - The default value is BitmapFillMode.SCALE.
-			
-			// TODO: svg preserveAspectRatio - Look into supporting all the various 
-			// 		 values such as meet, slice, xMin, xMid, etc.
-			// 		 @see http://www.w3.org/TR/SVG/coords.html#PreserveAspectRatioAttribute
-			
-			// smooth - The default value is false.
-			
-			// source
-			var qnEntity:QName = new QName(ns_xlink, "href"); 
-			var xlinkEntity:XMLList = node.attribute(qnEntity);
-			
-			// TODO: Figure out why old svg library had both xLinkEntity and @ns_xlink::href
-			var d:String = "";
-			
-			if(xlinkEntity.length() > 0)
-			{
-				d = xlinkEntity;
-			}
-			
-			if(node.@ns_xlink::href.length() > 0)
-			{
-				d = node.@ns_xlink::href;
-			}
-			
-			//Parse Embedded images
-						
-			if(d.indexOf("data:") == 0){
-				//Pull out datatype
-				var parts:Array = d.split(";");
-				var meta:String = parts[0];
-				var data:String = parts[1];
-				var splData:Array = data.split(",");
-				data = splData[1];
-				
-				var dec:Base64Decoder = new Base64Decoder();
-				dec.decode(data);
-				var bytes:ByteArray = dec.flush();
-				var ldr:Loader = new Loader();
-				ldr.contentLoaderInfo.addEventListener(Event.COMPLETE, function(e:Event){
-					var decodedBitmapData:BitmapData = Bitmap(e.target.content).bitmapData;
-					element.source = decodedBitmapData;
-				});
-				ldr.loadBytes(bytes);
-				
-				
-			}else{
-				element.source = d;
-			}
-			
-			
-			
-			
-			return element;
+		public static function prepareForWatercolor(data:XML):XML{
+			data = convertStylesToAttributes(data);
+			data = inheritAttributes(data);
+			return data;
 		}
 		
-		public static function createSVGFromSpark(element:BitmapImage):XML
+		public static function convertStylesToAttributes(data:XML):XML{
+			//Take the @style attribute and make real xml attributes out of it
+			styleToAttributes(data);
+			//Do this for all children
+			var qname:QName = new QName(null, "*");
+			for each(var childNode:XML in data[qname])
+			{
+				convertStylesToAttributes(childNode);
+			}
+			return data;
+		}
+		
+		protected static function styleToAttributes(node:XML):void{
+			if(node.@style.length() > 0){
+				var attributes:Array = SVGAttributes.parseStyle(node.@style);
+				for each(var o:Object in attributes){
+					node["@"+o.key] = o.value;
+				}
+			}
+		}
+		
+		public static function inheritAttributes(data:XML):XML{
+			
+			inheritAttributesToChildren(data);
+			
+			var qname:QName = new QName(null, "*");
+			for each(var childNode:XML in data[qname])
+			{
+				inheritAttributes(childNode);
+			}
+			return data;
+		}
+		
+		protected static function inheritAttributesToChildren(node:XML):void{
+			var attributeNames:XMLList = node.attributes();
+			var attributesToCopy:Object = getAttributesNeededToInherit(attributeNames);
+			
+			for(var key:String in attributesToCopy){
+				var val:String = attributesToCopy[key];
+				var qname:QName = new QName(null, "*");
+				for each(var childNode:XML in node[qname])
+				{
+					//Only if not defined in child
+					if(childNode["@"+key].length() == 0){
+						childNode["@"+key] = val;	
+					}					
+				}
+			}
+		}
+		
+		protected static var inheritedAttributes:Array = [
+			'clip-rule','color','color-interpolation',
+			'color-interpolation-filters', 'color-profile',
+			'color-rendering', 'cursor', 'direction', 'fill',
+			'fill-opacity','fill-rule','font','font-family',
+			'font-size','font-size-adjust','font-stretch',
+			'font-style','font-variant','font-weight',
+			'glyph-orientation-horizontal','glyph-orientation-vertical',
+			'image-rendering','kerning','letter-spacing',
+			'marker','marker-end','marker-mid','marker-start',
+			'pointer-events','shape-rendering','stroke',
+			'stroke-dasharray','stroke-dashoffset',
+			'stroke-linecap','stroke-linejoin','stroke-miterlimit',
+			'stroke-opacity','stroke-width','text-anchor',
+			'text-rendering','visibility','word-spacing',
+			'writing-mode'
+		];
+		
+		protected static function getAttributesNeededToInherit(xml:XMLList):Object{
+			var len:uint = xml.length();
+			var result:Object = new Object();
+			for(var i:uint = 0; i<len; i++){
+				var attrName:String = xml[i].name();
+				var attrValue:String = xml[i].toString();
+				if(inheritedAttributes.indexOf(attrName) !== -1){
+					result[attrName] = attrValue;
+				}
+			}
+			return result;
+		}
+		
+		public static function getTransform(svgtransform:String):Transform{
+			/*
+			The value of the ‘transform’ attribute is a <transform-list>, 
+			which is defined as a list of transform definitions, which are applied 
+			in the order provided. The individual transform definitions are separated by 
+			whitespace and/or a comma.
+			
+			transform="translate(20,20) scale(2)"
+			or
+			transform="translate(20,20),scale(2)"
+			
+			*/
+			
+			//Split into functions
+			var funcs:Array = svgtransform.split(/(?<!\d)[,\s](?!\()/);
+			var flen:uint = funcs.length;
+			
+			//Now apply one function after the other to our transform
+			var t:Transform = new Transform();
+			var m:Matrix = new Matrix();
+			
+			for(var i:uint=0;i<flen;i++){
+				var func:String = funcs[i];
+				var fsplit:Array = func.split("(");
+				var fname:String = fsplit[0];
+				var fparams:String = fsplit[1];
+				fparams = fparams.replace(")","");
+				var paramArray:Array = fparams.split(",");
+				
+				switch(fname){
+					case "matrix":
+						m = new Matrix(paramArray[0],paramArray[1],paramArray[2],paramArray[3],paramArray[4],paramArray[5]);
+						break;
+					case "translate":
+						var tX:Number = Number(paramArray[0]);
+						var tY:Number = paramArray.length > 1 ? Number(paramArray[1]) : 0;
+						m.translate(tX,tY);
+						break;
+					case "scale":
+						var sX:Number = Number(paramArray[0]);
+						var sY:Number = paramArray.length > 1 ? Number(paramArray[1]) : sX;
+						m.scale(sX,sY);
+						break;
+					case "rotate":
+						var angle:Number = Number(paramArray[0]);
+						if(paramArray.length > 1){
+							var rtX:Number = Number(paramArray[1]);
+							var rtY:Number = Number(paramArray[2]);
+							m.translate(rtX,rtY);
+							m.rotate(angle);
+							m.translate(rtX*-1,rtY*-1);
+						}else{
+							m.rotate(angle);							
+						}
+						break;
+					//TODO: skewX, skewY
+				}				
+			}
+			
+			t.matrix = m;
+			return t;
+		}
+		
+		public static function convertSVGtoWatercolor(data:XML, map:Dictionary = null):Vector.<Element>
 		{
-			// TODO: Generate SVG
-			return null;
+			var result:Vector.<Element>;
+			return result;
+		}
+
+		public static function rectFactory(data:XML):Element
+		{
+			var result:Element;
+			return result;
 		}
 	}
 }
